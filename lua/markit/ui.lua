@@ -10,6 +10,8 @@ local filter_prefix = "󰈔 Filter: "
 local flags_prefix = " Flags : "
 local path_prefix = " Path  : "
 
+local previewed_bufs = {}
+
 local function safe_set_lines(buf, start, end_, strict_indexing, replacement)
 	state.data.programmatic_change = true
 	local ok, err = pcall(vim.api.nvim_buf_set_lines, buf, start, end_, strict_indexing, replacement)
@@ -34,72 +36,22 @@ local function extract_value(line, prefix)
 end
 
 local function parse_current_inputs(buf)
-	local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
-	local q, f, fl, p
-	for _, line in ipairs(lines) do
-		if not q then
-			local match = line:match("[Qq]uery%s*:?%s*(.*)")
-			if match then
-				q = match
-					:gsub("󰈔%s*[Ff]ilter%s*:?.*", "")
-					:gsub("[Ff]ilter%s*:?.*", "")
-					:gsub("%s*[Ff]lags%s*:?.*", "")
-					:gsub("[Ff]lags%s*:?.*", "")
-					:gsub("%s*[Pp]ath%s*:?.*", "")
-					:gsub("[Pp]ath%s*:?.*", "")
-					:gsub("Found%s*:?.*", "")
-				q = vim.trim(q)
-			end
-		end
-		if not f then
-			local match = line:match("[Ff]ilter%s*:?%s*(.*)")
-			if match then
-				f = match
-					:gsub("%s*[Qq]uery%s*:?.*", "")
-					:gsub("[Qq]uery%s*:?.*", "")
-					:gsub("%s*[Ff]lags%s*:?.*", "")
-					:gsub("[Ff]lags%s*:?.*", "")
-					:gsub("%s*[Pp]ath%s*:?.*", "")
-					:gsub("[Pp]ath%s*:?.*", "")
-					:gsub("Found%s*:?.*", "")
-				f = vim.trim(f)
-			end
-		end
-		if not fl then
-			local match = line:match("[Ff]lags%s*:?%s*(.*)")
-			if match then
-				fl = match
-					:gsub("%s*[Qq]uery%s*:?.*", "")
-					:gsub("[Qq]uery%s*:?.*", "")
-					:gsub("󰈔%s*[Ff]ilter%s*:?.*", "")
-					:gsub("[Ff]ilter%s*:?.*", "")
-					:gsub("%s*[Pp]ath%s*:?.*", "")
-					:gsub("[Pp]ath%s*:?.*", "")
-					:gsub("Found%s*:?.*", "")
-				fl = vim.trim(fl)
-			end
-		end
-		if not p then
-			local match = line:match("[Pp]ath%s*:?%s*(.*)")
-			if match then
-				p = match
-					:gsub("%s*[Qq]uery%s*:?.*", "")
-					:gsub("[Qq]uery%s*:?.*", "")
-					:gsub("󰈔%s*[Ff]ilter%s*:?.*", "")
-					:gsub("[Ff]ilter%s*:?.*", "")
-					:gsub("%s*[Ff]lags%s*:?.*", "")
-					:gsub("[Ff]lags%s*:?.*", "")
-					:gsub("Found%s*:?.*", "")
-				p = vim.trim(p)
-			end
-		end
-	end
-	return q or "", f or "", fl or "", p or ""
+	local lines = vim.api.nvim_buf_get_lines(buf, 1, 5, false)
+	local q = extract_value(lines[1] or "", query_prefix)
+	local f = extract_value(lines[2] or "", filter_prefix)
+	local fl = extract_value(lines[3] or "", flags_prefix)
+	local p = extract_value(lines[4] or "", path_prefix)
+	return q, f, fl, p
 end
 
-local function rpad(str, len, char)
-	char = char or " "
-	return str .. string.rep(char, len - #str)
+local save_timer = nil
+local function debounced_save()
+	if save_timer then
+		save_timer:stop()
+	end
+	save_timer = vim.defer_fn(function()
+		state.save()
+	end, 500)
 end
 
 local function lpad(str, len, char)
@@ -108,19 +60,8 @@ local function lpad(str, len, char)
 end
 
 local function setup_highlights()
-	local colors = {
-		Title = { fg = "#89b4fa", bold = true },
-		Label = { fg = "#fab387" },
-		Success = { fg = "#a6e3a1" },
-		Error = { fg = "#f38ba8" },
-		File = { fg = "#89dceb" },
-		Ext = { fg = "#cba6f7" },
-		Sep = { fg = "#585b70" },
-		Text = { fg = "#bac2de" },
-		Line = { fg = "#94e2d5" },
-		Match = { fg = "#f38ba8", bg = "#313244" },
-	}
-	for name, hl in pairs(colors) do
+	local hl_config = state.data.config.highlights
+	for name, hl in pairs(hl_config) do
 		vim.api.nvim_set_hl(0, "MarkIt" .. name, hl)
 	end
 end
@@ -167,7 +108,7 @@ function M.update_ui(query, filter, flags, path, force)
 	state.data.last_filter = current_filter
 	state.data.last_flags = current_flags
 	state.data.last_path = current_path
-	state.save()
+	debounced_save()
 
 	if changed then
 		state.data.folded_files = {}
@@ -214,7 +155,7 @@ function M.update_ui(query, filter, flags, path, force)
 	local current_line_idx = #lines
 	for _, file in ipairs(file_order) do
 		local is_folded = state.data.folded_files[file]
-		local icon = is_folded and " 󰉋 " or " 󰉋 "
+		local icon = is_folded and " 󰉋 " or " 󰉖 "
 		table.insert(lines, icon .. file)
 		current_line_idx = current_line_idx + 1
 
@@ -312,15 +253,18 @@ function M.update_ui(query, filter, flags, path, force)
 			local text = res.text
 			local q = current_query:lower()
 			local start = 1
+			-- Calculate dynamic offset based on line number prefix
+			local prefix = string.format("  %s: ", lpad(res.lnum, 3))
+			local offset = #prefix
+
 			while true do
 				local s, e = text:lower():find(q, start, true)
 				if not s then
 					break
 				end
-				-- 7 is the offset for "  123: " prefix
-				vim.api.nvim_buf_set_extmark(state.data.buf, hl_ns, l_idx - 1, 7 + s - 1, {
+				vim.api.nvim_buf_set_extmark(state.data.buf, hl_ns, l_idx - 1, offset + s - 1, {
 					hl_group = "MarkItMatch",
-					end_col = 7 + e,
+					end_col = offset + e,
 				})
 				start = e + 1
 			end
@@ -459,11 +403,12 @@ local function find_editor_win(file_path, across_tabs)
 end
 
 function M.clear_previews()
-	for _, buf in ipairs(vim.api.nvim_list_bufs()) do
-		if vim.api.nvim_buf_is_valid(buf) then
-			vim.api.nvim_buf_clear_namespace(buf, preview_ns, 0, -1)
+	for _, b in ipairs(previewed_bufs) do
+		if vim.api.nvim_buf_is_valid(b) then
+			vim.api.nvim_buf_clear_namespace(b, preview_ns, 0, -1)
 		end
 	end
+	previewed_bufs = {}
 end
 
 local function preview_line()
@@ -480,6 +425,7 @@ local function preview_line()
 			local buf = vim.fn.bufadd(res.file)
 			vim.fn.bufload(buf)
 			vim.api.nvim_win_set_buf(editor_win, buf)
+			table.insert(previewed_bufs, buf)
 
 			if vim.api.nvim_get_option_value("filetype", { buf = buf }) == "" then
 				vim.api.nvim_buf_call(buf, function()
@@ -823,7 +769,7 @@ function M.create_window()
 				end
 			else
 				local line_text = vim.api.nvim_buf_get_lines(state.data.buf, line_idx - 1, line_idx, false)[1]
-				local file = line_text:match("󰉋 (.*)$")
+				local file = line_text:match("[󰉋󰉖] (.*)$")
 				if file then
 					state.data.folded_files[file] = not state.data.folded_files[file]
 					local lines = vim.api.nvim_buf_get_lines(state.data.buf, 1, 5, false)
@@ -840,7 +786,7 @@ function M.create_window()
 			local cursor = vim.api.nvim_win_get_cursor(0)
 			local line_idx = cursor[1]
 			local line_text = vim.api.nvim_buf_get_lines(state.data.buf, line_idx - 1, line_idx, false)[1]
-			local file = line_text:match("󰉋 (.*)$")
+			local file = line_text:match("[󰉋󰉖] (.*)$")
 			if file then
 				state.data.folded_files[file] = not state.data.folded_files[file]
 				local lines = vim.api.nvim_buf_get_lines(state.data.buf, 1, 5, false)

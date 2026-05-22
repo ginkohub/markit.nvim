@@ -1,5 +1,7 @@
 local M = {}
 
+local state = require("markit.state")
+
 local function get_project_root()
 	local root = vim.fn.finddir(".git", ".;")
 	if type(root) == "table" then
@@ -31,6 +33,13 @@ function M.run(query, filter, flags, path)
 
 		if flags and flags ~= "" then
 			local sanitized = flags:gsub("[^%w%s%.%-]", "")
+			local BLOCKED = { "exec", "pre%-glob", "iglob" }
+			for _, b in ipairs(BLOCKED) do
+				if sanitized:find("%-%-" .. b) then
+					vim.notify("markit: flag '" .. b .. "' tidak diizinkan", vim.log.levels.WARN)
+					return {}, true
+				end
+			end
 			for flag in string.gmatch(sanitized, "%S+") do
 				table.insert(args, flag)
 			end
@@ -56,7 +65,7 @@ function M.run(query, filter, flags, path)
 				file = file:gsub("\\", "/")
 				table.insert(results, { file = file, lnum = lnum, text = vim.trim(text) })
 			end
-			if #results >= 100 then
+			if #results >= state.data.config.max_results then
 				break
 			end
 		end

@@ -15,6 +15,23 @@ M.data = {
 	win = nil,
 	ui_map = {},
 	folded_files = {},
+	programmatic_change = false,
+	config = {
+		max_results = 100,
+		width = 40,
+		highlights = {
+			Title = { link = "Title" },
+			Label = { link = "Keyword" },
+			Success = { link = "DiagnosticOk" },
+			Error = { link = "DiagnosticError" },
+			File = { link = "Directory" },
+			Ext = { link = "Type" },
+			Sep = { link = "Comment" },
+			Text = { link = "Normal" },
+			Line = { link = "LineNr" },
+			Match = { link = "Search" },
+		},
+	},
 }
 
 function M.load()
@@ -58,6 +75,9 @@ function M.save()
 	end
 end
 
-M.load()
+local ok, err = pcall(M.load)
+if not ok then
+	vim.notify("markit: failed to load state: " .. tostring(err), vim.log.levels.WARN)
+end
 
 return M
