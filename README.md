@@ -2,6 +2,8 @@
 
 A search panel for Neovim powered by ripgrep (`rg`), providing aligned inputs (Query, Filter, Flags, Path), file-based folding, and live line previews.
 
+![Demo](docs/demo.gif)
+
 ## Features
 
 - **Aligned Inputs**: Query, Filter, Flags, and Path fields.
