@@ -385,10 +385,10 @@ local function find_existing_buf_win(file_path)
 	return nil, nil
 end
 
-local function find_editor_win(file_path, across_tabs)
-	-- For previews, we ONLY look at the current tab to avoid jumping
+local function find_editor_win(file_path)
 	local target_win = nil
 	local fallback_win = nil
+	local target_path = file_path and vim.fn.fnamemodify(file_path, ":p") or nil
 
 	for _, win in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
 		if win ~= state.data.win and vim.api.nvim_win_is_valid(win) then
@@ -398,13 +398,15 @@ local function find_editor_win(file_path, across_tabs)
 			local config = vim.api.nvim_win_get_config(win)
 
 			if ft ~= "markit" and config.relative == "" then
-				-- Ideal editor window
+				-- Highest priority: window already showing this file
+				if target_path and vim.fn.fnamemodify(vim.api.nvim_buf_get_name(b), ":p") == target_path then
+					return win, vim.api.nvim_get_current_tabpage()
+				end
+				-- Preferred: normal editor window
 				if bt == "" then
 					target_win = win
-					break
-				end
-				-- Fallback (dashboard, alpha, etc)
-				if bt == "nofile" or ft:match("dashboard") or ft == "alpha" then
+				-- Fallback: dashboard, landing page, etc.
+				elseif bt == "nofile" or ft:match("dashboard") or ft == "alpha" then
 					fallback_win = win
 				end
 			end
@@ -431,7 +433,7 @@ local function preview_line()
 	M.clear_previews()
 
 	if res then
-		local editor_win, tab = find_editor_win(res.file, false)
+		local editor_win, tab = find_editor_win(res.file)
 
 		if editor_win then
 			local buf = vim.fn.bufadd(res.file)
