@@ -118,6 +118,7 @@ local function setup_highlights()
 		Sep = { fg = "#585b70" },
 		Text = { fg = "#bac2de" },
 		Line = { fg = "#94e2d5" },
+		Match = { fg = "#f38ba8", bg = "#313244" },
 	}
 	for name, hl in pairs(colors) do
 		vim.api.nvim_set_hl(0, "MarkIt" .. name, hl)
@@ -305,6 +306,25 @@ function M.update_ui(query, filter, flags, path, force)
 			2,
 			{ hl_group = "MarkItLine", end_col = 2 + #lnum_str }
 		)
+
+		-- Highlight the matches within the text
+		if current_query ~= "" then
+			local text = res.text
+			local q = current_query:lower()
+			local start = 1
+			while true do
+				local s, e = text:lower():find(q, start, true)
+				if not s then
+					break
+				end
+				-- 7 is the offset for "  123: " prefix
+				vim.api.nvim_buf_set_extmark(state.data.buf, hl_ns, l_idx - 1, 7 + s - 1, {
+					hl_group = "MarkItMatch",
+					end_col = 7 + e,
+				})
+				start = e + 1
+			end
+		end
 	end
 
 	for i, line in ipairs(lines) do
@@ -411,34 +431,31 @@ end
 
 local function find_editor_win(file_path, across_tabs)
 	-- For previews, we ONLY look at the current tab to avoid jumping
-	local function is_editor_win(win)
-		if not vim.api.nvim_win_is_valid(win) then
-			return false
-		end
-		if win == state.data.win then
-			return false
-		end
-		local b = vim.api.nvim_win_get_buf(win)
-		local bt = vim.api.nvim_get_option_value("buftype", { buf = b })
-		local ft = vim.api.nvim_get_option_value("filetype", { buf = b })
-		if ft == "markit" or ft:match("^snacks_") or ft == "noice" then
-			return false
-		end
-		local config = vim.api.nvim_win_get_config(win)
-		if config.relative ~= "" then
-			return false
-		end
-		return bt == ""
-	end
+	local target_win = nil
+	local fallback_win = nil
 
-	-- Look in current tab ONLY
 	for _, win in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
-		if is_editor_win(win) then
-			return win, vim.api.nvim_get_current_tabpage()
+		if win ~= state.data.win and vim.api.nvim_win_is_valid(win) then
+			local b = vim.api.nvim_win_get_buf(win)
+			local bt = vim.api.nvim_get_option_value("buftype", { buf = b })
+			local ft = vim.api.nvim_get_option_value("filetype", { buf = b })
+			local config = vim.api.nvim_win_get_config(win)
+
+			if ft ~= "markit" and config.relative == "" then
+				-- Ideal editor window
+				if bt == "" then
+					target_win = win
+					break
+				end
+				-- Fallback (dashboard, alpha, etc)
+				if bt == "nofile" or ft:match("dashboard") or ft == "alpha" then
+					fallback_win = win
+				end
+			end
 		end
 	end
 
-	return nil, nil
+	return target_win or fallback_win, vim.api.nvim_get_current_tabpage()
 end
 
 function M.clear_previews()
@@ -462,20 +479,18 @@ local function preview_line()
 		if editor_win then
 			local buf = vim.fn.bufadd(res.file)
 			vim.fn.bufload(buf)
-			if vim.api.nvim_buf_is_valid(buf) and vim.bo[buf].filetype == "" then
+			vim.api.nvim_win_set_buf(editor_win, buf)
+
+			if vim.api.nvim_get_option_value("filetype", { buf = buf }) == "" then
 				vim.api.nvim_buf_call(buf, function()
 					vim.cmd("filetype detect")
 				end)
 			end
-			vim.api.nvim_win_set_buf(editor_win, buf)
+
 			local lnum = tonumber(res.lnum)
 			local line_count = vim.api.nvim_buf_line_count(buf)
-			if lnum > line_count then
-				lnum = line_count
-			end
-			if lnum < 1 then
-				lnum = 1
-			end
+			if lnum > line_count then lnum = line_count end
+			if lnum < 1 then lnum = 1 end
 			vim.api.nvim_win_set_cursor(editor_win, { lnum, 0 })
 
 			vim.api.nvim_buf_set_extmark(buf, preview_ns, lnum - 1, 0, {
@@ -738,22 +753,43 @@ function M.create_window()
 				else
 					-- 2. REUSE existing editor window in current tab (NO SPLIT)
 					local target_win = nil
+					local fallback_win = nil
+
 					for _, win in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
 						if win ~= state.data.win then
 							local b = vim.api.nvim_win_get_buf(win)
 							local ft = vim.api.nvim_get_option_value("filetype", { buf = b })
+							local bt = vim.api.nvim_get_option_value("buftype", { buf = b })
+
 							if ft ~= "markit" and vim.api.nvim_win_get_config(win).relative == "" then
-								target_win = win
-								break
+								-- Preferred: a normal editor buffer
+								if bt == "" then
+									target_win = win
+									break
+								end
+								-- Fallback: a landing/dashboard buffer (usually nofile)
+								if bt == "nofile" or ft == "snacks_dashboard" or ft == "alpha" or ft == "dashboard" then
+									fallback_win = win
+								end
 							end
 						end
 					end
 
+					target_win = target_win or fallback_win
+
 					if target_win then
 						vim.api.nvim_set_current_win(target_win)
-						vim.cmd("edit " .. vim.fn.fnameescape(res.file))
+						local buf = vim.fn.bufadd(res.file)
+						vim.fn.bufload(buf)
+						vim.api.nvim_win_set_buf(target_win, buf)
+						-- Force filetype detection if it's a new buffer
+						if vim.api.nvim_get_option_value("filetype", { buf = buf }) == "" then
+							vim.api.nvim_buf_call(buf, function()
+								vim.cmd("filetype detect")
+							end)
+						end
 					else
-						-- Fallback only if NO windows exist (shouldn't happen)
+						-- Fallback only if NO windows exist
 						vim.cmd("tabedit " .. vim.fn.fnameescape(res.file))
 					end
 					existing_win = vim.api.nvim_get_current_win()
