@@ -2,7 +2,6 @@ local M = {}
 local state = require("markit.state")
 local search = require("markit.search")
 
-local ns_id = vim.api.nvim_create_namespace("markit_ui")
 local hl_ns = vim.api.nvim_create_namespace("markit_hl")
 
 local query_prefix = " Query : "
@@ -48,10 +47,24 @@ local save_timer = nil
 local function debounced_save()
 	if save_timer then
 		save_timer:stop()
+		save_timer:close()
+		save_timer = nil
 	end
-	save_timer = vim.defer_fn(function()
-		state.save()
-	end, 500)
+	save_timer = vim.uv.new_timer()
+	if save_timer then
+		save_timer:start(
+			500,
+			0,
+			vim.schedule_wrap(function()
+				state.save()
+				if save_timer then
+					save_timer:stop()
+					save_timer:close()
+					save_timer = nil
+				end
+			end)
+		)
+	end
 end
 
 local function lpad(str, len, char)
@@ -175,7 +188,6 @@ function M.update_ui(query, filter, flags, path, force)
 	end
 	safe_set_lines(state.data.buf, 5, -1, false, remainder)
 
-	vim.api.nvim_buf_clear_namespace(state.data.buf, ns_id, 0, -1)
 	vim.api.nvim_buf_clear_namespace(state.data.buf, hl_ns, 0, -1)
 
 	vim.api.nvim_buf_set_extmark(state.data.buf, hl_ns, 1, 0, {
@@ -435,8 +447,12 @@ local function preview_line()
 
 			local lnum = tonumber(res.lnum)
 			local line_count = vim.api.nvim_buf_line_count(buf)
-			if lnum > line_count then lnum = line_count end
-			if lnum < 1 then lnum = 1 end
+			if lnum > line_count then
+				lnum = line_count
+			end
+			if lnum < 1 then
+				lnum = 1
+			end
 			vim.api.nvim_win_set_cursor(editor_win, { lnum, 0 })
 
 			vim.api.nvim_buf_set_extmark(buf, preview_ns, lnum - 1, 0, {
@@ -828,7 +844,7 @@ function M.create_window()
 
 	vim.cmd("rightbelow vsplit")
 	state.data.win = vim.api.nvim_get_current_win()
-	vim.api.nvim_win_set_width(state.data.win, 40)
+	vim.api.nvim_win_set_width(state.data.win, state.data.config.width or 40)
 	vim.api.nvim_win_set_buf(state.data.win, state.data.buf)
 
 	local opts = {
