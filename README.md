@@ -43,5 +43,7 @@ Using lazy.nvim:
 
 #### Results List (Normal Mode)
 
-- `<CR>` / `<TAB>` - Toggle folding/unfolding of file matches. If on a match line, opens it in the editor.
+- `<CR>` - Toggle folding/unfolding of file matches. If on a match line, opens it in the editor.
+- `<TAB>` - Toggle folding/unfolding of file matches.
+- `t` - Open the match in a new tab.
 - `q` - Close the search panel.

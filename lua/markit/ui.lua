@@ -40,9 +40,13 @@ local function parse_current_inputs(buf)
 		if not q then
 			local match = line:match("[Qq]uery%s*:?%s*(.*)")
 			if match then
-				q = match:gsub("󰈔%s*[Ff]ilter%s*:?.*", ""):gsub("[Ff]ilter%s*:?.*", "")
-					:gsub("%s*[Ff]lags%s*:?.*", ""):gsub("[Ff]lags%s*:?.*", "")
-					:gsub("%s*[Pp]ath%s*:?.*", ""):gsub("[Pp]ath%s*:?.*", "")
+				q = match
+					:gsub("󰈔%s*[Ff]ilter%s*:?.*", "")
+					:gsub("[Ff]ilter%s*:?.*", "")
+					:gsub("%s*[Ff]lags%s*:?.*", "")
+					:gsub("[Ff]lags%s*:?.*", "")
+					:gsub("%s*[Pp]ath%s*:?.*", "")
+					:gsub("[Pp]ath%s*:?.*", "")
 					:gsub("Found%s*:?.*", "")
 				q = vim.trim(q)
 			end
@@ -50,9 +54,13 @@ local function parse_current_inputs(buf)
 		if not f then
 			local match = line:match("[Ff]ilter%s*:?%s*(.*)")
 			if match then
-				f = match:gsub("%s*[Qq]uery%s*:?.*", ""):gsub("[Qq]uery%s*:?.*", "")
-					:gsub("%s*[Ff]lags%s*:?.*", ""):gsub("[Ff]lags%s*:?.*", "")
-					:gsub("%s*[Pp]ath%s*:?.*", ""):gsub("[Pp]ath%s*:?.*", "")
+				f = match
+					:gsub("%s*[Qq]uery%s*:?.*", "")
+					:gsub("[Qq]uery%s*:?.*", "")
+					:gsub("%s*[Ff]lags%s*:?.*", "")
+					:gsub("[Ff]lags%s*:?.*", "")
+					:gsub("%s*[Pp]ath%s*:?.*", "")
+					:gsub("[Pp]ath%s*:?.*", "")
 					:gsub("Found%s*:?.*", "")
 				f = vim.trim(f)
 			end
@@ -60,9 +68,13 @@ local function parse_current_inputs(buf)
 		if not fl then
 			local match = line:match("[Ff]lags%s*:?%s*(.*)")
 			if match then
-				fl = match:gsub("%s*[Qq]uery%s*:?.*", ""):gsub("[Qq]uery%s*:?.*", "")
-					:gsub("󰈔%s*[Ff]ilter%s*:?.*", ""):gsub("[Ff]ilter%s*:?.*", "")
-					:gsub("%s*[Pp]ath%s*:?.*", ""):gsub("[Pp]ath%s*:?.*", "")
+				fl = match
+					:gsub("%s*[Qq]uery%s*:?.*", "")
+					:gsub("[Qq]uery%s*:?.*", "")
+					:gsub("󰈔%s*[Ff]ilter%s*:?.*", "")
+					:gsub("[Ff]ilter%s*:?.*", "")
+					:gsub("%s*[Pp]ath%s*:?.*", "")
+					:gsub("[Pp]ath%s*:?.*", "")
 					:gsub("Found%s*:?.*", "")
 				fl = vim.trim(fl)
 			end
@@ -70,9 +82,13 @@ local function parse_current_inputs(buf)
 		if not p then
 			local match = line:match("[Pp]ath%s*:?%s*(.*)")
 			if match then
-				p = match:gsub("%s*[Qq]uery%s*:?.*", ""):gsub("[Qq]uery%s*:?.*", "")
-					:gsub("󰈔%s*[Ff]ilter%s*:?.*", ""):gsub("[Ff]ilter%s*:?.*", "")
-					:gsub("%s*[Ff]lags%s*:?.*", ""):gsub("[Ff]lags%s*:?.*", "")
+				p = match
+					:gsub("%s*[Qq]uery%s*:?.*", "")
+					:gsub("[Qq]uery%s*:?.*", "")
+					:gsub("󰈔%s*[Ff]ilter%s*:?.*", "")
+					:gsub("[Ff]ilter%s*:?.*", "")
+					:gsub("%s*[Ff]lags%s*:?.*", "")
+					:gsub("[Ff]lags%s*:?.*", "")
 					:gsub("Found%s*:?.*", "")
 				p = vim.trim(p)
 			end
@@ -139,7 +155,12 @@ function M.update_ui(query, filter, flags, path, force)
 	local current_flags = flags or ""
 	local current_path = path or ""
 
-	local changed = (prev_query ~= current_query or prev_filter ~= current_filter or prev_flags ~= current_flags or prev_path ~= current_path)
+	local changed = (
+		prev_query ~= current_query
+		or prev_filter ~= current_filter
+		or prev_flags ~= current_flags
+		or prev_path ~= current_path
+	)
 
 	state.data.last_query = current_query
 	state.data.last_filter = current_filter
@@ -367,6 +388,59 @@ end
 
 local preview_ns = vim.api.nvim_create_namespace("markit_preview")
 
+-- Function to find if a file is ALREADY open in any tab (Robust Absolute Path Match)
+local function find_existing_buf_win(file_path)
+	if not file_path or file_path == "" then
+		return nil, nil
+	end
+	local target_path = vim.fn.fnamemodify(file_path, ":p")
+
+	for _, tab in ipairs(vim.api.nvim_list_tabpages()) do
+		for _, win in ipairs(vim.api.nvim_tabpage_list_wins(tab)) do
+			if vim.api.nvim_win_is_valid(win) then
+				local b = vim.api.nvim_win_get_buf(win)
+				local bpath = vim.api.nvim_buf_get_name(b)
+				if bpath ~= "" and vim.fn.fnamemodify(bpath, ":p") == target_path then
+					return win, tab
+				end
+			end
+		end
+	end
+	return nil, nil
+end
+
+local function find_editor_win(file_path, across_tabs)
+	-- For previews, we ONLY look at the current tab to avoid jumping
+	local function is_editor_win(win)
+		if not vim.api.nvim_win_is_valid(win) then
+			return false
+		end
+		if win == state.data.win then
+			return false
+		end
+		local b = vim.api.nvim_win_get_buf(win)
+		local bt = vim.api.nvim_get_option_value("buftype", { buf = b })
+		local ft = vim.api.nvim_get_option_value("filetype", { buf = b })
+		if ft == "markit" or ft:match("^snacks_") or ft == "noice" then
+			return false
+		end
+		local config = vim.api.nvim_win_get_config(win)
+		if config.relative ~= "" then
+			return false
+		end
+		return bt == ""
+	end
+
+	-- Look in current tab ONLY
+	for _, win in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
+		if is_editor_win(win) then
+			return win, vim.api.nvim_get_current_tabpage()
+		end
+	end
+
+	return nil, nil
+end
+
 function M.clear_previews()
 	for _, buf in ipairs(vim.api.nvim_list_bufs()) do
 		if vim.api.nvim_buf_is_valid(buf) then
@@ -383,13 +457,7 @@ local function preview_line()
 	M.clear_previews()
 
 	if res then
-		local editor_win = nil
-		for _, win in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
-			if win ~= state.data.win and vim.api.nvim_win_is_valid(win) then
-				editor_win = win
-				break
-			end
-		end
+		local editor_win, tab = find_editor_win(res.file, false)
 
 		if editor_win then
 			local buf = vim.fn.bufadd(res.file)
@@ -423,6 +491,9 @@ function M.create_window()
 	if not state.data.buf or not vim.api.nvim_buf_is_valid(state.data.buf) then
 		state.data.buf = vim.api.nvim_create_buf(false, true)
 		vim.api.nvim_set_option_value("buftype", "nofile", { buf = state.data.buf })
+		vim.api.nvim_set_option_value("bufhidden", "hide", { buf = state.data.buf })
+		vim.api.nvim_set_option_value("buflisted", false, { buf = state.data.buf })
+		vim.api.nvim_set_option_value("swapfile", false, { buf = state.data.buf })
 		vim.api.nvim_set_option_value("filetype", "markit", { buf = state.data.buf })
 
 		vim.b[state.data.buf].completion = false
@@ -439,7 +510,13 @@ function M.create_window()
 			format_input_line(path_prefix, state.data.last_path or ""),
 			" Found: 0 matches",
 		})
-		M.update_ui(state.data.last_query or "", state.data.last_filter or "", state.data.last_flags or "", state.data.last_path or "", true)
+		M.update_ui(
+			state.data.last_query or "",
+			state.data.last_filter or "",
+			state.data.last_flags or "",
+			state.data.last_path or "",
+			true
+		)
 
 		vim.api.nvim_create_autocmd({ "TextChangedI", "TextChanged" }, {
 			buffer = state.data.buf,
@@ -514,12 +591,22 @@ function M.create_window()
 					local new_f_line = format_input_line(filter_prefix, f)
 					local new_fl_line = format_input_line(flags_prefix, fl)
 					local new_p_line = format_input_line(path_prefix, p)
-					if new_q_line ~= q_line or new_f_line ~= f_line or new_fl_line ~= fl_line or new_p_line ~= p_line then
+					if
+						new_q_line ~= q_line
+						or new_f_line ~= f_line
+						or new_fl_line ~= fl_line
+						or new_p_line ~= p_line
+					then
 						safe_set_lines(state.data.buf, 1, 5, false, { new_q_line, new_f_line, new_fl_line, new_p_line })
 					end
 					M.update_ui(vim.trim(q), vim.trim(f), vim.trim(fl), vim.trim(p))
 				else
-					M.update_ui(state.data.last_query, state.data.last_filter, state.data.last_flags, state.data.last_path)
+					M.update_ui(
+						state.data.last_query,
+						state.data.last_filter,
+						state.data.last_flags,
+						state.data.last_path
+					)
 					local win = state.data.win
 					if win and vim.api.nvim_win_is_valid(win) then
 						pcall(vim.api.nvim_win_set_cursor, win, { 2, #query_prefix })
@@ -642,23 +729,38 @@ function M.create_window()
 			local line_idx = cursor[1]
 			local res = state.data.ui_map[line_idx]
 			if res then
-				local editor_win = nil
-				for _, win in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
-					if win ~= state.data.win and vim.api.nvim_win_is_valid(win) then
-						editor_win = win
-						break
+				local existing_win, existing_tab = find_existing_buf_win(res.file)
+
+				if existing_win and existing_tab then
+					-- 1. JUMP to existing tab/window if found anywhere
+					vim.api.nvim_set_current_tabpage(existing_tab)
+					vim.api.nvim_set_current_win(existing_win)
+				else
+					-- 2. REUSE existing editor window in current tab (NO SPLIT)
+					local target_win = nil
+					for _, win in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
+						if win ~= state.data.win then
+							local b = vim.api.nvim_win_get_buf(win)
+							local ft = vim.api.nvim_get_option_value("filetype", { buf = b })
+							if ft ~= "markit" and vim.api.nvim_win_get_config(win).relative == "" then
+								target_win = win
+								break
+							end
+						end
 					end
+
+					if target_win then
+						vim.api.nvim_set_current_win(target_win)
+						vim.cmd("edit " .. vim.fn.fnameescape(res.file))
+					else
+						-- Fallback only if NO windows exist (shouldn't happen)
+						vim.cmd("tabedit " .. vim.fn.fnameescape(res.file))
+					end
+					existing_win = vim.api.nvim_get_current_win()
 				end
-				if editor_win then
-					vim.api.nvim_set_current_win(editor_win)
-					local buf = vim.fn.bufadd(res.file)
-					vim.fn.bufload(buf)
-					if vim.api.nvim_buf_is_valid(buf) and vim.bo[buf].filetype == "" then
-						vim.api.nvim_buf_call(buf, function()
-							vim.cmd("filetype detect")
-						end)
-					end
-					vim.api.nvim_win_set_buf(editor_win, buf)
+
+				if existing_win then
+					local buf = vim.api.nvim_win_get_buf(existing_win)
 					local lnum = tonumber(res.lnum)
 					local line_count = vim.api.nvim_buf_line_count(buf)
 					if lnum > line_count then
@@ -667,7 +769,7 @@ function M.create_window()
 					if lnum < 1 then
 						lnum = 1
 					end
-					vim.api.nvim_win_set_cursor(editor_win, { lnum, 0 })
+					vim.api.nvim_win_set_cursor(existing_win, { lnum, 0 })
 					vim.api.nvim_buf_clear_namespace(buf, preview_ns, 0, -1)
 					vim.api.nvim_buf_set_extmark(buf, preview_ns, lnum - 1, 0, {
 						end_line = lnum - 1,
@@ -711,6 +813,25 @@ function M.create_window()
 				local fl = extract_value(lines[3] or "", flags_prefix)
 				local p = extract_value(lines[4] or "", path_prefix)
 				M.update_ui(vim.trim(q), vim.trim(f), vim.trim(fl), vim.trim(p))
+			end
+		end, { buffer = state.data.buf })
+
+		vim.keymap.set("n", "t", function()
+			local cursor = vim.api.nvim_win_get_cursor(0)
+			local line_idx = cursor[1]
+			local res = state.data.ui_map[line_idx]
+			if res then
+				vim.cmd("tabedit " .. vim.fn.fnameescape(res.file))
+				local buf = vim.api.nvim_get_current_buf()
+				local lnum = tonumber(res.lnum)
+				local line_count = vim.api.nvim_buf_line_count(buf)
+				if lnum > line_count then
+					lnum = line_count
+				end
+				if lnum < 1 then
+					lnum = 1
+				end
+				vim.api.nvim_win_set_cursor(0, { lnum, 0 })
 			end
 		end, { buffer = state.data.buf })
 
