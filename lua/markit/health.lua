@@ -1,11 +1,11 @@
 local M = {}
 
-function M.check()
+function M.check(force_print)
 	local rg_exists = vim.fn.executable("rg") == 1
 	local data_dir = vim.fn.stdpath("data") .. "/markit"
 	local dir_exists = vim.fn.isdirectory(data_dir) == 1
 	local has_health, health = pcall(require, "vim.health")
-	if has_health and health.start then
+	if not force_print and has_health and health.start then
 		health.start("markit")
 		if rg_exists then
 			health.ok("ripgrep is installed and executable")

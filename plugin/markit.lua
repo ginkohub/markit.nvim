@@ -4,5 +4,5 @@ vim.api.nvim_create_user_command("MarkIt", function()
 end, {})
 
 vim.api.nvim_create_user_command("MarkItHealth", function()
-	require("markit.health").check()
+	require("markit.health").check(true)
 end, {})
