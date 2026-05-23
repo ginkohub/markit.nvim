@@ -98,6 +98,7 @@ local function add_to_history(q, f, fl, p, m)
 	state.save()
 end
 
+local search_timer = nil
 function M.update_ui(query, filter, flags, path, method, force)
 	if not state.data.buf or not vim.api.nvim_buf_is_valid(state.data.buf) then
 		return
@@ -134,184 +135,182 @@ function M.update_ui(query, filter, flags, path, method, force)
 		state.data.folded_files = {}
 	end
 
-	local results = state.data.results or {}
-	local executable_exists = true
-	if changed or force or not state.data.results then
-		results, executable_exists = search.run(current_method, current_query, current_filter, current_flags, current_path)
-		state.data.results = results
-	end
-	state.data.ui_map = {}
+	local function render(results, is_searching, executable_exists)
+		state.data.ui_map = {}
 
-	local status_emoji = (#results > 0) and "" or ""
-	local status_hl = (#results > 0) and "MarkItSuccess" or "MarkItError"
-	if not query or query == "" then
-		status_emoji = ""
-		status_hl = "MarkItLabel"
-	elseif not executable_exists then
-		status_emoji = string.format(" (%s not found)", current_method)
-		status_hl = "MarkItError"
-	end
+		local status_emoji = (#results > 0) and "" or ""
+		local status_hl = (#results > 0) and "MarkItSuccess" or "MarkItError"
+		local status_text = string.format("%s Found: %d matches", status_emoji, #results)
 
-	local lines = {
-		"MarkIt Search",
-		"",
-		"",
-		"",
-		"",
-		"",
-		string.format("%s Found: %d matches", status_emoji, #results),
-		"",
-	}
-
-	local grouped = {}
-	local file_order = {}
-	for _, res in ipairs(results) do
-		if not grouped[res.file] then
-			grouped[res.file] = {}
-			table.insert(file_order, res.file)
+		if is_searching then
+			status_emoji = "󱎫"
+			status_hl = "MarkItLabel"
+			status_text = "󱎫 Searching..."
+		elseif not query or query == "" then
+			status_emoji = ""
+			status_hl = "MarkItLabel"
+			status_text = string.format("%s Found: %d matches", status_emoji, #results)
+		elseif not executable_exists then
+			status_emoji = string.format(" (%s not found)", current_method)
+			status_hl = "MarkItError"
+			status_text = status_emoji
 		end
-		table.insert(grouped[res.file], res)
-	end
 
-	local current_line_idx = #lines
-	for _, file in ipairs(file_order) do
-		local is_folded = state.data.folded_files[file]
-		local icon = is_folded and " 󰉋 " or " 󰉖 "
-		table.insert(lines, icon .. file)
-		current_line_idx = current_line_idx + 1
+		local lines = {
+			"MarkIt Search",
+			"",
+			"",
+			"",
+			"",
+			"",
+			status_text,
+			"",
+		}
 
-		if not is_folded then
-			for _, res in ipairs(grouped[file]) do
-				local cleaned_text = res.text:gsub("\n", " ")
-				table.insert(lines, string.format("  %s: %s", lpad(res.lnum, 3), cleaned_text))
-				current_line_idx = current_line_idx + 1
-				state.data.ui_map[current_line_idx] = res
+		local grouped = {}
+		local file_order = {}
+		for _, res in ipairs(results) do
+			if not grouped[res.file] then
+				grouped[res.file] = {}
+				table.insert(file_order, res.file)
 			end
+			table.insert(grouped[res.file], res)
 		end
-	end
 
-	safe_set_lines(state.data.buf, 0, 1, false, { lines[1] })
-	local remainder = {}
-	for j = 7, #lines do
-		table.insert(remainder, lines[j])
-	end
-	safe_set_lines(state.data.buf, 6, -1, false, remainder)
+		local current_line_idx = #lines
+		for _, file in ipairs(file_order) do
+			local is_folded = state.data.folded_files[file]
+			local icon = is_folded and " 󰉋 " or " 󰉖 "
+			table.insert(lines, icon .. file)
+			current_line_idx = current_line_idx + 1
 
-	vim.api.nvim_buf_clear_namespace(state.data.buf, hl_ns, 0, -1)
-
-	vim.api.nvim_buf_set_extmark(state.data.buf, hl_ns, 1, 0, {
-		hl_group = "MarkItLabel",
-		end_col = #query_prefix,
-	})
-	vim.api.nvim_buf_set_extmark(state.data.buf, hl_ns, 2, 0, {
-		hl_group = "MarkItLabel",
-		end_col = #filter_prefix,
-	})
-	vim.api.nvim_buf_set_extmark(state.data.buf, hl_ns, 3, 0, {
-		hl_group = "MarkItLabel",
-		end_col = #flags_prefix,
-	})
-	vim.api.nvim_buf_set_extmark(state.data.buf, hl_ns, 4, 0, {
-		hl_group = "MarkItLabel",
-		end_col = #path_prefix,
-	})
-	vim.api.nvim_buf_set_extmark(state.data.buf, hl_ns, 5, 0, {
-		hl_group = "MarkItLabel",
-		end_col = #method_prefix,
-	})
-
-	if current_query == "" then
-		vim.api.nvim_buf_set_extmark(state.data.buf, hl_ns, 1, #query_prefix, {
-			virt_text = { { "Search pattern...", "Comment" } },
-			virt_text_pos = "eol",
-		})
-	end
-	if current_filter == "" then
-		vim.api.nvim_buf_set_extmark(state.data.buf, hl_ns, 2, #filter_prefix, {
-			virt_text = { { "e.g. lua, js (optional)", "Comment" } },
-			virt_text_pos = "eol",
-		})
-	end
-	if current_flags == "" then
-		vim.api.nvim_buf_set_extmark(state.data.buf, hl_ns, 3, #flags_prefix, {
-			virt_text = { { "e.g. -i, -w (optional)", "Comment" } },
-			virt_text_pos = "eol",
-		})
-	end
-	if current_path == "" then
-		vim.api.nvim_buf_set_extmark(state.data.buf, hl_ns, 4, #path_prefix, {
-			virt_text = { { "e.g. ./src (optional)", "Comment" } },
-			virt_text_pos = "eol",
-		})
-	end
-	if current_method == "" then
-		vim.api.nvim_buf_set_extmark(state.data.buf, hl_ns, 5, #method_prefix, {
-			virt_text = { { "rg or ast", "Comment" } },
-			virt_text_pos = "eol",
-		})
-	end
-
-	local buf_lines = vim.api.nvim_buf_get_lines(state.data.buf, 0, -1, false)
-
-	vim.api.nvim_buf_set_extmark(
-		state.data.buf,
-		hl_ns,
-		0,
-		0,
-		{ hl_group = "MarkItTitle", end_col = #(buf_lines[1] or "") }
-	)
-	vim.api.nvim_buf_set_extmark(state.data.buf, hl_ns, 6, 0, { hl_group = status_hl, end_col = #(buf_lines[7] or "") })
-
-	for l_idx, res in pairs(state.data.ui_map) do
-		vim.api.nvim_buf_set_extmark(
-			state.data.buf,
-			hl_ns,
-			l_idx - 1,
-			0,
-			{ hl_group = "MarkItText", end_col = #(buf_lines[l_idx] or "") }
-		)
-		local lnum_str = ":" .. res.lnum
-		vim.api.nvim_buf_set_extmark(
-			state.data.buf,
-			hl_ns,
-			l_idx - 1,
-			2,
-			{ hl_group = "MarkItLine", end_col = 2 + #lnum_str }
-		)
-
-		-- Highlight the matches within the text
-		if current_query ~= "" then
-			local text = res.text
-			local q = current_query:lower()
-			local start = 1
-			-- Calculate dynamic offset based on line number prefix
-			local prefix = string.format("  %s: ", lpad(res.lnum, 3))
-			local offset = #prefix
-
-			while true do
-				local s, e = text:lower():find(q, start, true)
-				if not s then
-					break
+			if not is_folded then
+				for _, res in ipairs(grouped[file]) do
+					local cleaned_text = res.text:gsub("\n", " ")
+					table.insert(lines, string.format("  %s: %s", lpad(res.lnum, 3), cleaned_text))
+					current_line_idx = current_line_idx + 1
+					state.data.ui_map[current_line_idx] = res
 				end
-				vim.api.nvim_buf_set_extmark(state.data.buf, hl_ns, l_idx - 1, offset + s - 1, {
-					hl_group = "MarkItMatch",
-					end_col = offset + e,
-				})
-				start = e + 1
+			end
+		end
+
+		safe_set_lines(state.data.buf, 0, 1, false, { lines[1] })
+		local remainder = {}
+		for j = 7, #lines do
+			table.insert(remainder, lines[j])
+		end
+		safe_set_lines(state.data.buf, 6, -1, false, remainder)
+
+		vim.api.nvim_buf_clear_namespace(state.data.buf, hl_ns, 0, -1)
+
+		-- (Extmarks are set here - keeping existing logic)
+		vim.api.nvim_buf_set_extmark(state.data.buf, hl_ns, 1, 0, { hl_group = "MarkItLabel", end_col = #query_prefix })
+		vim.api.nvim_buf_set_extmark(state.data.buf, hl_ns, 2, 0, { hl_group = "MarkItLabel", end_col = #filter_prefix })
+		vim.api.nvim_buf_set_extmark(state.data.buf, hl_ns, 3, 0, { hl_group = "MarkItLabel", end_col = #flags_prefix })
+		vim.api.nvim_buf_set_extmark(state.data.buf, hl_ns, 4, 0, { hl_group = "MarkItLabel", end_col = #path_prefix })
+		vim.api.nvim_buf_set_extmark(state.data.buf, hl_ns, 5, 0, { hl_group = "MarkItLabel", end_col = #method_prefix })
+
+		if current_query == "" then
+			vim.api.nvim_buf_set_extmark(state.data.buf, hl_ns, 1, #query_prefix, {
+				virt_text = { { "Search pattern...", "Comment" } },
+				virt_text_pos = "eol",
+			})
+		end
+		-- ... (rest of virt_texts)
+		if current_filter == "" then
+			vim.api.nvim_buf_set_extmark(state.data.buf, hl_ns, 2, #filter_prefix, {
+				virt_text = { { "e.g. lua, js (optional)", "Comment" } },
+				virt_text_pos = "eol",
+			})
+		end
+		if current_flags == "" then
+			vim.api.nvim_buf_set_extmark(state.data.buf, hl_ns, 3, #flags_prefix, {
+				virt_text = { { "e.g. -i, -w (optional)", "Comment" } },
+				virt_text_pos = "eol",
+			})
+		end
+		if current_path == "" then
+			vim.api.nvim_buf_set_extmark(state.data.buf, hl_ns, 4, #path_prefix, {
+				virt_text = { { "e.g. ./src (optional)", "Comment" } },
+				virt_text_pos = "eol",
+			})
+		end
+		if current_method == "" then
+			vim.api.nvim_buf_set_extmark(state.data.buf, hl_ns, 5, #method_prefix, {
+				virt_text = { { "rg or ast", "Comment" } },
+				virt_text_pos = "eol",
+			})
+		end
+
+		local buf_lines_rendered = vim.api.nvim_buf_get_lines(state.data.buf, 0, -1, false)
+		vim.api.nvim_buf_set_extmark(state.data.buf, hl_ns, 0, 0, { hl_group = "MarkItTitle", end_col = #(buf_lines_rendered[1] or "") })
+		vim.api.nvim_buf_set_extmark(state.data.buf, hl_ns, 6, 0, { hl_group = status_hl, end_col = #(buf_lines_rendered[7] or "") })
+
+		for l_idx, res in pairs(state.data.ui_map) do
+			-- Highlight matches and text (keeping existing logic)
+			vim.api.nvim_buf_set_extmark(state.data.buf, hl_ns, l_idx - 1, 0, { hl_group = "MarkItText", end_col = #(buf_lines_rendered[l_idx] or "") })
+			local lnum_str = ":" .. res.lnum
+			vim.api.nvim_buf_set_extmark(state.data.buf, hl_ns, l_idx - 1, 2, { hl_group = "MarkItLine", end_col = 2 + #lnum_str })
+			if current_query ~= "" then
+				local text = res.text
+				local q = current_query:lower()
+				local start = 1
+				local prefix = string.format("  %s: ", lpad(res.lnum, 3))
+				local offset = #prefix
+				while true do
+					local s, e = text:lower():find(q, start, true)
+					if not s then break end
+					vim.api.nvim_buf_set_extmark(state.data.buf, hl_ns, l_idx - 1, offset + s - 1, { hl_group = "MarkItMatch", end_col = offset + e })
+					start = e + 1
+				end
+			end
+		end
+
+		for i, line in ipairs(lines) do
+			if line:match("󰉋 ") then
+				vim.api.nvim_buf_set_extmark(state.data.buf, hl_ns, i - 1, 0, { hl_group = "MarkItFile", end_col = #(buf_lines_rendered[i] or "") })
 			end
 		end
 	end
 
-	for i, line in ipairs(lines) do
-		if line:match("󰉋 ") then
-			vim.api.nvim_buf_set_extmark(
-				state.data.buf,
-				hl_ns,
-				i - 1,
+	if search_timer then
+		search_timer:stop()
+		search_timer:close()
+		search_timer = nil
+	end
+
+	if force then
+		search.run(current_method, current_query, current_filter, current_flags, current_path, function(results, executable_exists)
+			state.data.results = results
+			render(results, false, executable_exists)
+		end)
+		return
+	end
+
+	if changed then
+		-- Immediate visual feedback that search is pending
+		render(state.data.results or {}, true, true)
+
+		search_timer = vim.uv.new_timer()
+		if search_timer then
+			search_timer:start(
+				500,
 				0,
-				{ hl_group = "MarkItFile", end_col = #(buf_lines[i] or "") }
+				vim.schedule_wrap(function()
+					search.run(current_method, current_query, current_filter, current_flags, current_path, function(results, executable_exists)
+						state.data.results = results
+						render(results, false, executable_exists)
+					end)
+					if search_timer then
+						search_timer:stop()
+						search_timer:close()
+						search_timer = nil
+					end
+				end)
 			)
 		end
+	else
+		render(state.data.results or {}, false, true)
 	end
 end
 

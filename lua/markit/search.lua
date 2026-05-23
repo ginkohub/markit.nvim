@@ -5,7 +5,7 @@ M.engines = {
 	astgrep = require("markit.engines.astgrep"),
 }
 
-function M.run(method, query, filter, flags, path)
+function M.run(method, query, filter, flags, path, on_complete)
 	local m = method or "ripgrep"
 	if m == "rg" then
 		m = "ripgrep"
@@ -13,7 +13,7 @@ function M.run(method, query, filter, flags, path)
 		m = "astgrep"
 	end
 	local engine = M.engines[m] or M.engines.ripgrep
-	return engine.run(query, filter, flags, path)
+	engine.run(query, filter, flags, path, on_complete)
 end
 
 return M
