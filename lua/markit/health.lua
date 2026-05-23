@@ -2,6 +2,7 @@ local M = {}
 
 function M.check(force_print)
 	local rg_exists = vim.fn.executable("rg") == 1
+	local ag_exists = vim.fn.executable("ast-grep") == 1
 	local data_dir = vim.fn.stdpath("data") .. "/markit"
 	local dir_exists = vim.fn.isdirectory(data_dir) == 1
 	local has_health, health = pcall(require, "vim.health")
@@ -11,6 +12,11 @@ function M.check(force_print)
 			health.ok("ripgrep is installed and executable")
 		else
 			health.error("ripgrep is not installed or not in PATH")
+		end
+		if ag_exists then
+			health.ok("ast-grep is installed and executable")
+		else
+			health.warn("ast-grep is not installed (optional engine)")
 		end
 		if dir_exists then
 			health.ok("State directory exists and is writable: " .. data_dir)
@@ -23,6 +29,11 @@ function M.check(force_print)
 			table.insert(lines, " [OK] ripgrep is installed")
 		else
 			table.insert(lines, " [ERROR] ripgrep is not installed")
+		end
+		if ag_exists then
+			table.insert(lines, " [OK] ast-grep is installed")
+		else
+			table.insert(lines, " [WARN] ast-grep is not installed (optional)")
 		end
 		if dir_exists then
 			table.insert(lines, " [OK] State directory exists")

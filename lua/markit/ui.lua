@@ -8,6 +8,7 @@ local query_prefix = " Query : "
 local filter_prefix = "󰈔 Filter: "
 local flags_prefix = " Flags : "
 local path_prefix = " Path  : "
+local method_prefix = "󱓞 Method: "
 
 local previewed_bufs = {}
 
@@ -31,16 +32,18 @@ local function extract_value(line, prefix)
 		return ""
 	end
 	local val = line:sub(#prefix + 1)
-	return val:match("^(.-)%s*$") or ""
+	val = val:match("^(.-)%s*$") or ""
+	return val:gsub("\n", " ")
 end
 
 local function parse_current_inputs(buf)
-	local lines = vim.api.nvim_buf_get_lines(buf, 1, 5, false)
+	local lines = vim.api.nvim_buf_get_lines(buf, 1, 6, false)
 	local q = extract_value(lines[1] or "", query_prefix)
 	local f = extract_value(lines[2] or "", filter_prefix)
 	local fl = extract_value(lines[3] or "", flags_prefix)
 	local p = extract_value(lines[4] or "", path_prefix)
-	return q, f, fl, p
+	local m = extract_value(lines[5] or "", method_prefix)
+	return q, f, fl, p, m
 end
 
 local save_timer = nil
@@ -79,11 +82,11 @@ local function setup_highlights()
 	end
 end
 
-local function add_to_history(q, f, fl, p)
+local function add_to_history(q, f, fl, p, m)
 	if q == "" then
 		return
 	end
-	local entry = string.format("%s | %s | %s | %s", q, f, fl, p)
+	local entry = string.format("%s | %s | %s | %s | %s", q, f, fl, p, m)
 	if state.data.history[#state.data.history] == entry then
 		return
 	end
@@ -95,7 +98,7 @@ local function add_to_history(q, f, fl, p)
 	state.save()
 end
 
-function M.update_ui(query, filter, flags, path, force)
+function M.update_ui(query, filter, flags, path, method, force)
 	if not state.data.buf or not vim.api.nvim_buf_is_valid(state.data.buf) then
 		return
 	end
@@ -104,23 +107,27 @@ function M.update_ui(query, filter, flags, path, force)
 	local prev_filter = state.data.last_filter
 	local prev_flags = state.data.last_flags
 	local prev_path = state.data.last_path
+	local prev_method = state.data.last_method
 
 	local current_query = query or ""
 	local current_filter = filter or "*"
 	local current_flags = flags or ""
 	local current_path = path or ""
+	local current_method = method or state.data.config.engine or "ripgrep"
 
 	local changed = (
 		prev_query ~= current_query
 		or prev_filter ~= current_filter
 		or prev_flags ~= current_flags
 		or prev_path ~= current_path
+		or prev_method ~= current_method
 	)
 
 	state.data.last_query = current_query
 	state.data.last_filter = current_filter
 	state.data.last_flags = current_flags
 	state.data.last_path = current_path
+	state.data.last_method = current_method
 	debounced_save()
 
 	if changed then
@@ -128,9 +135,9 @@ function M.update_ui(query, filter, flags, path, force)
 	end
 
 	local results = state.data.results or {}
-	local rg_exists = vim.fn.executable("rg") == 1
+	local executable_exists = true
 	if changed or force or not state.data.results then
-		results, rg_exists = search.run(current_query, current_filter, current_flags, current_path)
+		results, executable_exists = search.run(current_method, current_query, current_filter, current_flags, current_path)
 		state.data.results = results
 	end
 	state.data.ui_map = {}
@@ -140,13 +147,14 @@ function M.update_ui(query, filter, flags, path, force)
 	if not query or query == "" then
 		status_emoji = ""
 		status_hl = "MarkItLabel"
-	elseif not rg_exists then
-		status_emoji = " (rg not found)"
+	elseif not executable_exists then
+		status_emoji = string.format(" (%s not found)", current_method)
 		status_hl = "MarkItError"
 	end
 
 	local lines = {
 		"MarkIt Search",
+		"",
 		"",
 		"",
 		"",
@@ -174,7 +182,8 @@ function M.update_ui(query, filter, flags, path, force)
 
 		if not is_folded then
 			for _, res in ipairs(grouped[file]) do
-				table.insert(lines, string.format("  %s: %s", lpad(res.lnum, 3), res.text))
+				local cleaned_text = res.text:gsub("\n", " ")
+				table.insert(lines, string.format("  %s: %s", lpad(res.lnum, 3), cleaned_text))
 				current_line_idx = current_line_idx + 1
 				state.data.ui_map[current_line_idx] = res
 			end
@@ -183,10 +192,10 @@ function M.update_ui(query, filter, flags, path, force)
 
 	safe_set_lines(state.data.buf, 0, 1, false, { lines[1] })
 	local remainder = {}
-	for j = 6, #lines do
+	for j = 7, #lines do
 		table.insert(remainder, lines[j])
 	end
-	safe_set_lines(state.data.buf, 5, -1, false, remainder)
+	safe_set_lines(state.data.buf, 6, -1, false, remainder)
 
 	vim.api.nvim_buf_clear_namespace(state.data.buf, hl_ns, 0, -1)
 
@@ -205,6 +214,10 @@ function M.update_ui(query, filter, flags, path, force)
 	vim.api.nvim_buf_set_extmark(state.data.buf, hl_ns, 4, 0, {
 		hl_group = "MarkItLabel",
 		end_col = #path_prefix,
+	})
+	vim.api.nvim_buf_set_extmark(state.data.buf, hl_ns, 5, 0, {
+		hl_group = "MarkItLabel",
+		end_col = #method_prefix,
 	})
 
 	if current_query == "" then
@@ -231,6 +244,12 @@ function M.update_ui(query, filter, flags, path, force)
 			virt_text_pos = "eol",
 		})
 	end
+	if current_method == "" then
+		vim.api.nvim_buf_set_extmark(state.data.buf, hl_ns, 5, #method_prefix, {
+			virt_text = { { "rg or ast", "Comment" } },
+			virt_text_pos = "eol",
+		})
+	end
 
 	local buf_lines = vim.api.nvim_buf_get_lines(state.data.buf, 0, -1, false)
 
@@ -241,7 +260,7 @@ function M.update_ui(query, filter, flags, path, force)
 		0,
 		{ hl_group = "MarkItTitle", end_col = #(buf_lines[1] or "") }
 	)
-	vim.api.nvim_buf_set_extmark(state.data.buf, hl_ns, 5, 0, { hl_group = status_hl, end_col = #(buf_lines[6] or "") })
+	vim.api.nvim_buf_set_extmark(state.data.buf, hl_ns, 6, 0, { hl_group = status_hl, end_col = #(buf_lines[7] or "") })
 
 	for l_idx, res in pairs(state.data.ui_map) do
 		vim.api.nvim_buf_set_extmark(
@@ -310,11 +329,13 @@ local function navigate_history(dir)
 		local f = state.data.last_filter or ""
 		local fl = state.data.last_flags or ""
 		local p = state.data.last_path or ""
-		safe_set_lines(state.data.buf, 1, 5, false, {
+		local m = state.data.last_method or "ripgrep"
+		safe_set_lines(state.data.buf, 1, 6, false, {
 			format_input_line(query_prefix, q),
 			format_input_line(filter_prefix, f),
 			format_input_line(flags_prefix, fl),
 			format_input_line(path_prefix, p),
+			format_input_line(method_prefix, m),
 		})
 		state.data.history_idx = new_idx
 		local win = state.data.win
@@ -328,23 +349,31 @@ local function navigate_history(dir)
 				pcall(vim.api.nvim_win_set_cursor, win, { 4, #flags_prefix + #fl })
 			elseif cursor[1] == 5 then
 				pcall(vim.api.nvim_win_set_cursor, win, { 5, #path_prefix + #p })
+			elseif cursor[1] == 6 then
+				pcall(vim.api.nvim_win_set_cursor, win, { 6, #method_prefix + #m })
 			end
 		end
 		return
 	end
 	state.data.history_idx = new_idx
 	local entry = state.data.history[new_idx]
-	local q, f, fl, p = entry:match("^(.-) | (.-) | (.-) | (.*)$")
+	local q, f, fl, p, m = entry:match("^(.-) | (.-) | (.-) | (.-) | (.*)$")
+	if not q then
+		q, f, fl, p = entry:match("^(.-) | (.-) | (.-) | (.*)$")
+		m = "ripgrep"
+	end
 	if not q then
 		q, f = entry:match("^(.*) | (.*)$")
 		fl = ""
 		p = ""
+		m = "ripgrep"
 	end
-	safe_set_lines(state.data.buf, 1, 5, false, {
+	safe_set_lines(state.data.buf, 1, 6, false, {
 		format_input_line(query_prefix, q),
 		format_input_line(filter_prefix, f),
 		format_input_line(flags_prefix, fl),
 		format_input_line(path_prefix, p),
+		format_input_line(method_prefix, m),
 	})
 	local win = state.data.win
 	if win and vim.api.nvim_win_is_valid(win) then
@@ -357,9 +386,11 @@ local function navigate_history(dir)
 			pcall(vim.api.nvim_win_set_cursor, win, { 4, #flags_prefix + #fl })
 		elseif cursor[1] == 5 then
 			pcall(vim.api.nvim_win_set_cursor, win, { 5, #path_prefix + #p })
+		elseif cursor[1] == 6 then
+			pcall(vim.api.nvim_win_set_cursor, win, { 6, #method_prefix + #m })
 		end
 	end
-	M.update_ui(q, f, fl, p)
+	M.update_ui(q, f, fl, p, m)
 end
 
 local preview_ns = vim.api.nvim_create_namespace("markit_preview")
@@ -487,6 +518,7 @@ function M.create_window()
 			format_input_line(filter_prefix, state.data.last_filter or ""),
 			format_input_line(flags_prefix, state.data.last_flags or ""),
 			format_input_line(path_prefix, state.data.last_path or ""),
+			format_input_line(method_prefix, state.data.last_method or "ripgrep"),
 			" Found: 0 matches",
 		})
 		M.update_ui(
@@ -494,6 +526,7 @@ function M.create_window()
 			state.data.last_filter or "",
 			state.data.last_flags or "",
 			state.data.last_path or "",
+			state.data.last_method or "ripgrep",
 			false
 		)
 
@@ -506,90 +539,97 @@ function M.create_window()
 				if not state.data.buf or not vim.api.nvim_buf_is_valid(state.data.buf) then
 					return
 				end
+
 				local buf_lines = vim.api.nvim_buf_get_lines(state.data.buf, 0, -1, false)
 				local needs_restore = false
-				if #buf_lines < 6 then
+
+				-- Check if we have enough lines for the header, 5 inputs, and status line
+				if #buf_lines < 7 then
 					needs_restore = true
-				elseif buf_lines[1] ~= "MarkIt Search" then
-					needs_restore = true
-				elseif not vim.startswith(buf_lines[2] or "", query_prefix) then
-					needs_restore = true
-				elseif not vim.startswith(buf_lines[3] or "", filter_prefix) then
-					needs_restore = true
-				elseif not vim.startswith(buf_lines[4] or "", flags_prefix) then
-					needs_restore = true
-				elseif not vim.startswith(buf_lines[5] or "", path_prefix) then
-					needs_restore = true
+				else
+					-- Rigorous check for all fixed prefixes and positions
+					if buf_lines[1] ~= "MarkIt Search" then
+						needs_restore = true
+					elseif not vim.startswith(buf_lines[2] or "", query_prefix) then
+						needs_restore = true
+					elseif not vim.startswith(buf_lines[3] or "", filter_prefix) then
+						needs_restore = true
+					elseif not vim.startswith(buf_lines[4] or "", flags_prefix) then
+						needs_restore = true
+					elseif not vim.startswith(buf_lines[5] or "", path_prefix) then
+						needs_restore = true
+					elseif not vim.startswith(buf_lines[6] or "", method_prefix) then
+						needs_restore = true
+					elseif not (buf_lines[7] or ""):match("Found: %d+ matches") then
+						needs_restore = true
+					end
 				end
+
 				if needs_restore then
-					local q, f, fl, p = parse_current_inputs(state.data.buf)
+					-- When restoring, we try to preserve whatever values were there
+					-- but we look for them across all lines in case they merged
+					local full_text = table.concat(buf_lines, "\n")
+					
+					local function find_value(text, prefix, next_prefix)
+						local start_idx = text:find(prefix, 1, true)
+						if not start_idx then return "" end
+						
+						local val_start = start_idx + #prefix
+						local end_idx
+						if next_prefix then
+							end_idx = text:find(next_prefix, val_start, true)
+						end
+						
+						local val
+						if end_idx then
+							val = text:sub(val_start, end_idx - 1)
+						else
+							-- If no next prefix, take until first newline or end
+							local nl = text:find("\n", val_start)
+							if nl then
+								val = text:sub(val_start, nl - 1)
+							else
+								val = text:sub(val_start)
+							end
+						end
+						return vim.trim(val):gsub("\n", " ")
+					end
+
+					local q = find_value(full_text, query_prefix, filter_prefix)
+					local f = find_value(full_text, filter_prefix, flags_prefix)
+					local fl = find_value(full_text, flags_prefix, path_prefix)
+					local p = find_value(full_text, path_prefix, method_prefix)
+					local m = find_value(full_text, method_prefix, nil)
+
 					local results = state.data.results or {}
 					local status_emoji = (#results > 0) and "" or ""
-					if q == "" then
-						status_emoji = ""
-					end
-					safe_set_lines(state.data.buf, 0, 6, false, {
+					if q == "" then status_emoji = "" end
+
+					safe_set_lines(state.data.buf, 0, 7, false, {
 						"MarkIt Search",
 						format_input_line(query_prefix, q),
 						format_input_line(filter_prefix, f),
 						format_input_line(flags_prefix, fl),
 						format_input_line(path_prefix, p),
+						format_input_line(method_prefix, m),
 						string.format("%s Found: %d matches", status_emoji, #results),
 					})
+
+					-- Reset cursor to a safe place
 					local win = state.data.win
 					if win and vim.api.nvim_win_is_valid(win) then
-						local cursor = vim.api.nvim_win_get_cursor(win)
-						local line = cursor[1]
-						if line == 2 then
-							pcall(vim.api.nvim_win_set_cursor, win, { 2, #query_prefix + #q })
-						elseif line == 3 then
-							pcall(vim.api.nvim_win_set_cursor, win, { 3, #filter_prefix + #f })
-						elseif line == 4 then
-							pcall(vim.api.nvim_win_set_cursor, win, { 4, #flags_prefix + #fl })
-						elseif line == 5 then
-							pcall(vim.api.nvim_win_set_cursor, win, { 5, #path_prefix + #p })
-						else
-							pcall(vim.api.nvim_win_set_cursor, win, { 2, #query_prefix + #q })
-						end
+						pcall(vim.api.nvim_win_set_cursor, win, { 2, #query_prefix + #q })
 					end
-					M.update_ui(vim.trim(q), vim.trim(f), vim.trim(fl), vim.trim(p))
+					
+					M.update_ui(q, f, fl, p, m)
 					return
 				end
+
+				-- Normal processing if structure is intact
 				local cursor = vim.api.nvim_win_get_cursor(0)
-				if cursor[1] >= 2 and cursor[1] <= 5 then
-					local lines = vim.api.nvim_buf_get_lines(state.data.buf, 1, 5, false)
-					local q_line = lines[1] or ""
-					local f_line = lines[2] or ""
-					local fl_line = lines[3] or ""
-					local p_line = lines[4] or ""
-					local q = extract_value(q_line, query_prefix)
-					local f = extract_value(f_line, filter_prefix)
-					local fl = extract_value(fl_line, flags_prefix)
-					local p = extract_value(p_line, path_prefix)
-					local new_q_line = format_input_line(query_prefix, q)
-					local new_f_line = format_input_line(filter_prefix, f)
-					local new_fl_line = format_input_line(flags_prefix, fl)
-					local new_p_line = format_input_line(path_prefix, p)
-					if
-						new_q_line ~= q_line
-						or new_f_line ~= f_line
-						or new_fl_line ~= fl_line
-						or new_p_line ~= p_line
-					then
-						safe_set_lines(state.data.buf, 1, 5, false, { new_q_line, new_f_line, new_fl_line, new_p_line })
-					end
-					M.update_ui(vim.trim(q), vim.trim(f), vim.trim(fl), vim.trim(p))
-				else
-					M.update_ui(
-						state.data.last_query,
-						state.data.last_filter,
-						state.data.last_flags,
-						state.data.last_path
-					)
-					local win = state.data.win
-					if win and vim.api.nvim_win_is_valid(win) then
-						pcall(vim.api.nvim_win_set_cursor, win, { 2, #query_prefix })
-					end
+				if cursor[1] >= 2 and cursor[1] <= 6 then
+					local q, f, fl, p, m = parse_current_inputs(state.data.buf)
+					M.update_ui(vim.trim(q), vim.trim(f), vim.trim(fl), vim.trim(p), vim.trim(m))
 				end
 			end,
 		})
@@ -609,11 +649,11 @@ function M.create_window()
 						pcall(vim.api.nvim_win_set_cursor, 0, { 2, #query_prefix + #q })
 						line = 2
 						col = #query_prefix + #q
-					elseif line > 5 then
-						local p = state.data.last_path or ""
-						pcall(vim.api.nvim_win_set_cursor, 0, { 5, #path_prefix + #p })
-						line = 5
-						col = #path_prefix + #p
+					elseif line > 6 then
+						local m = state.data.last_method or "ripgrep"
+						pcall(vim.api.nvim_win_set_cursor, 0, { 6, #method_prefix + #m })
+						line = 6
+						col = #method_prefix + #m
 					end
 				end
 
@@ -657,6 +697,16 @@ function M.create_window()
 					elseif col > max_col then
 						pcall(vim.api.nvim_win_set_cursor, 0, { 5, max_col })
 					end
+				elseif line == 6 then
+					local lines = vim.api.nvim_buf_get_lines(state.data.buf, 5, 6, false)
+					local m = extract_value(lines[1] or "", method_prefix)
+					local min_col = #method_prefix
+					local max_col = min_col + #m
+					if col < min_col then
+						pcall(vim.api.nvim_win_set_cursor, 0, { 6, min_col })
+					elseif col > max_col then
+						pcall(vim.api.nvim_win_set_cursor, 0, { 6, max_col })
+					end
 				end
 				preview_line()
 			end,
@@ -679,7 +729,7 @@ function M.create_window()
 
 		vim.keymap.set("i", "<CR>", function()
 			local cursor = vim.api.nvim_win_get_cursor(0)
-			local lines = vim.api.nvim_buf_get_lines(state.data.buf, 1, 5, false)
+			local lines = vim.api.nvim_buf_get_lines(state.data.buf, 1, 6, false)
 			if cursor[1] == 2 then
 				local f = extract_value(lines[2] or "", filter_prefix)
 				vim.api.nvim_win_set_cursor(0, { 3, #filter_prefix + #f })
@@ -689,16 +739,20 @@ function M.create_window()
 			elseif cursor[1] == 4 then
 				local p = extract_value(lines[4] or "", path_prefix)
 				vim.api.nvim_win_set_cursor(0, { 5, #path_prefix + #p })
+			elseif cursor[1] == 5 then
+				local m = extract_value(lines[5] or "", method_prefix)
+				vim.api.nvim_win_set_cursor(0, { 6, #method_prefix + #m })
 			else
 				local q = extract_value(lines[1] or "", query_prefix)
 				local f = extract_value(lines[2] or "", filter_prefix)
 				local fl = extract_value(lines[3] or "", flags_prefix)
 				local p = extract_value(lines[4] or "", path_prefix)
-				add_to_history(vim.trim(q), vim.trim(f), vim.trim(fl), vim.trim(p))
+				local m = extract_value(lines[5] or "", method_prefix)
+				add_to_history(vim.trim(q), vim.trim(f), vim.trim(fl), vim.trim(p), vim.trim(m))
 				vim.cmd("stopinsert")
 				local line_count = vim.api.nvim_buf_line_count(state.data.buf)
-				if line_count >= 8 then
-					vim.api.nvim_win_set_cursor(0, { 8, 2 })
+				if line_count >= 9 then
+					vim.api.nvim_win_set_cursor(0, { 9, 2 })
 				end
 			end
 		end, { buffer = state.data.buf })
@@ -790,12 +844,13 @@ function M.create_window()
 				local file = line_text:match("[󰉋󰉖] (.*)$")
 				if file then
 					state.data.folded_files[file] = not state.data.folded_files[file]
-					local lines = vim.api.nvim_buf_get_lines(state.data.buf, 1, 5, false)
+					local lines = vim.api.nvim_buf_get_lines(state.data.buf, 1, 6, false)
 					local q = extract_value(lines[1] or "", query_prefix)
 					local f = extract_value(lines[2] or "", filter_prefix)
 					local fl = extract_value(lines[3] or "", flags_prefix)
 					local p = extract_value(lines[4] or "", path_prefix)
-					M.update_ui(vim.trim(q), vim.trim(f), vim.trim(fl), vim.trim(p))
+					local m = extract_value(lines[5] or "", method_prefix)
+					M.update_ui(vim.trim(q), vim.trim(f), vim.trim(fl), vim.trim(p), vim.trim(m))
 				end
 			end
 		end, { buffer = state.data.buf })
@@ -807,12 +862,13 @@ function M.create_window()
 			local file = line_text:match("[󰉋󰉖] (.*)$")
 			if file then
 				state.data.folded_files[file] = not state.data.folded_files[file]
-				local lines = vim.api.nvim_buf_get_lines(state.data.buf, 1, 5, false)
+				local lines = vim.api.nvim_buf_get_lines(state.data.buf, 1, 6, false)
 				local q = extract_value(lines[1] or "", query_prefix)
 				local f = extract_value(lines[2] or "", filter_prefix)
 				local fl = extract_value(lines[3] or "", flags_prefix)
 				local p = extract_value(lines[4] or "", path_prefix)
-				M.update_ui(vim.trim(q), vim.trim(f), vim.trim(fl), vim.trim(p))
+				local m = extract_value(lines[5] or "", method_prefix)
+				M.update_ui(vim.trim(q), vim.trim(f), vim.trim(fl), vim.trim(p), vim.trim(m))
 			end
 		end, { buffer = state.data.buf })
 

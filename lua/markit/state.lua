@@ -9,6 +9,7 @@ M.data = {
 	last_filter = "*",
 	last_flags = "",
 	last_path = "",
+	last_method = "ripgrep",
 	history = {},
 	history_idx = 0,
 	buf = nil,
@@ -19,6 +20,7 @@ M.data = {
 	config = {
 		max_results = 100,
 		width = 40,
+		engine = "ripgrep",
 		highlights = {
 			Title = { link = "Title" },
 			Label = { link = "Keyword" },
@@ -63,6 +65,7 @@ function M.save()
 		last_filter = M.data.last_filter,
 		last_flags = M.data.last_flags,
 		last_path = M.data.last_path,
+		last_method = M.data.last_method,
 		history = M.data.history,
 	}
 	if vim.fn.isdirectory(data_dir) == 0 then
