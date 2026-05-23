@@ -494,7 +494,7 @@ function M.create_window()
 			state.data.last_filter or "",
 			state.data.last_flags or "",
 			state.data.last_path or "",
-			true
+			false
 		)
 
 		vim.api.nvim_create_autocmd({ "TextChangedI", "TextChanged" }, {
